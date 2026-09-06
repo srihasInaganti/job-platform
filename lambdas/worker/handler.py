@@ -1,6 +1,11 @@
-import json, os, io, time, boto3
+import io
+import json
+import os
+import time
+import boto3
 from botocore.exceptions import ClientError
 from PIL import Image
+from typing import Any, cast
 
 dynamodb = boto3.resource("dynamodb")
 s3 = boto3.client("s3")
@@ -9,10 +14,12 @@ RAW_BUCKET = os.environ["RAW_BUCKET"]
 RESULTS_BUCKET = os.environ["RESULTS_BUCKET"]
 LEASE_SECONDS = 120  # a PROCESSING job older than this is considered abandoned
 
+
 def handler(event, context):
     for record in event["Records"]:
         body = json.loads(record["body"])
         process_one_job(body["job_id"], context)
+
 
 def try_claim(job_id, context):
     now = int(time.time())
@@ -44,26 +51,34 @@ def try_claim(job_id, context):
         )
         return True
     except ClientError as e:
-        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+        error_code = e.response.get("Error", {}).get("Code")
+        if error_code == "ConditionalCheckFailedException":
             return False  # someone else holds a live lease — treat as success, let SQS delete the msg
         raise
 
-def process_one_job(job_id, context):
-    job = table.get_item(Key={"job_id": job_id}).get("Item")
-    if not job:
+def process_one_job(job_id: str, context: Any):
+    response = table.get_item(Key={"job_id": job_id})
+    raw_item = response.get("Item")
+    if not raw_item:
         return
+
+    # Cast to standard dict so .get() and key lookups have normal dictionary semantics
+    job = cast(dict[str, Any], raw_item)
 
     if not try_claim(job_id, context):
         return
 
     try:
-        obj = s3.get_object(Bucket=RAW_BUCKET, Key=job["s3_key"])
+        s3_key = str(job["s3_key"])
+        obj = s3.get_object(Bucket=RAW_BUCKET, Key=s3_key)
         img = Image.open(io.BytesIO(obj["Body"].read()))
 
-        op = job["operation"]
-        fmt = job["params"].get("format", img.format or "PNG")
+        op = str(job.get("operation", ""))
+        params: dict[str, Any] = job.get("params") or {}
+        fmt = str(params.get("format", img.format or "PNG"))
+
         if op == "resize":
-            width = int(job["params"].get("width", 200))
+            width = int(params.get("width", 200))
             ratio = width / img.width
             img = img.resize((width, int(img.height * ratio)))
         elif op == "thumbnail":
