@@ -48,6 +48,7 @@ jobs:
     permissions:
       id-token: write # Required for AWS OIDC authentication
       contents: read
+      pages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -77,3 +78,14 @@ jobs:
         run: |
           terraform init
           terraform apply -auto-approve -var="worker_image_tag=${{ github.sha }}"
+        - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './frontend'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
