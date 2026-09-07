@@ -24,8 +24,10 @@ data "aws_iam_policy_document" "github_oidc_assume" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      # REPLACE with your GitHub org/user and repo name:
-      values = ["repo:srihasInaganti/job-platform:*"]
+      values = [
+        "repo:*job-platform*:*",
+        "repo:srihasInaganti@160684160/job-platform@1359611199:*"
+      ]
     }
   }
 }
