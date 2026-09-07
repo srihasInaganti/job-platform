@@ -7,7 +7,7 @@ import random
 import boto3
 from botocore.exceptions import ClientError
 from PIL import Image
-from typing import Any, cast
+from typing import Any, cast, Optional
 import logging
 
 dynamodb = boto3.resource("dynamodb")
@@ -16,8 +16,8 @@ table = dynamodb.Table(os.environ["JOBS_TABLE"])
 RAW_BUCKET = os.environ["RAW_BUCKET"]
 RESULTS_BUCKET = os.environ["RESULTS_BUCKET"]
 
-# Match to SQS Visibility Timeout (e.g. 15-20s for fast failover/reclaim)
-LEASE_SECONDS = int(os.environ.get("LEASE_SECONDS", "15"))
+# Set LEASE_SECONDS conservatively below SQS Visibility Timeout (e.g. 10s vs 15s)
+LEASE_SECONDS = int(os.environ.get("LEASE_SECONDS", "10"))
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -32,17 +32,17 @@ def handler(event, context):
         process_one_job(body["job_id"], context)
 
 
-def try_claim(job_id: str, lease_token: str, context: Any) -> bool:
+def try_claim(job_id: str, lease_token: str, context: Any) -> Optional[int]:
     """
     Atomically claims or reclaims a job.
-    Enforces that the caller must have a valid lease token stored.
+    Returns the new attempt_count on success, or None if skipped/held.
     """
     now = int(time.time())
     lease_cutoff = now - LEASE_SECONDS
     worker_id = context.aws_request_id if context else str(uuid.uuid4())
 
     try:
-        table.update_item(
+        res = table.update_item(
             Key={"job_id": job_id},
             UpdateExpression=(
                 "SET #s = :processing, "
@@ -68,14 +68,16 @@ def try_claim(job_id: str, lease_token: str, context: Any) -> bool:
                 ":zero": 0,
                 ":one": 1,
             },
+            ReturnValues="ALL_NEW",
         )
-        log("job_claimed", job_id=job_id, worker_id=worker_id, lease_token=lease_token)
-        return True
+        current_attempts = int(res.get("Attributes", {}).get("attempt_count", 1))
+        log("job_claimed", job_id=job_id, worker_id=worker_id, lease_token=lease_token, attempt=current_attempts)
+        return current_attempts
     except ClientError as e:
         error_code = e.response.get("Error", {}).get("Code")
         if error_code == "ConditionalCheckFailedException":
             log("job_claim_skipped", job_id=job_id, reason="held_by_another_worker_or_terminal")
-            return False
+            return None
         raise
 
 
@@ -123,16 +125,19 @@ def process_one_job(job_id: str, context: Any):
     # Generate a unique fencing token for this claim attempt
     lease_token = str(uuid.uuid4())
 
-    if not try_claim(job_id, lease_token, context):
-        return
+    attempts = try_claim(job_id, lease_token, context)
+    if attempts is None:
+        # If the lease is still warm, fail the Lambda execution
+        # so SQS retries after visibility timeout instead of silently dropping the message.
+        raise RuntimeError(f"Job {job_id} currently locked by another worker lease")
 
     params: dict[str, Any] = job.get("params") or {}
 
     # --- RAW HARD CRASH CHAOS INJECTION ---
-    # Simulates an unhandled SIGKILL / container OOM, bypassing all Python catch blocks
+    # Only crash on attempt 1 so attempt 2 can recover and finalize
     chaos_kill_pct = int(params.get("chaos_kill_pct", 0))
-    if chaos_kill_pct > 0 and random.randint(1, 100) <= chaos_kill_pct:
-        log("chaos_kill_triggered", job_id=job_id, lease_token=lease_token)
+    if chaos_kill_pct > 0 and attempts == 1 and random.randint(1, 100) <= chaos_kill_pct:
+        log("chaos_kill_triggered", job_id=job_id, lease_token=lease_token, attempt=attempts)
         os._exit(137)
     # --------------------------------------
 
