@@ -4,7 +4,7 @@ resource "aws_sqs_queue" "job_queue" {
 }
 
 resource "aws_sqs_queue" "job_dlq" {
-  name                      = "job-dlq"
+  name = "job-dlq"
 }
 
 resource "aws_sqs_queue_redrive_policy" "job_queue_redrive" {

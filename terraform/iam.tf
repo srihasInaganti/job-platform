@@ -60,7 +60,7 @@ resource "aws_iam_role_policy" "reconcile_policy" {
     Statement = [
       {
         Effect   = "Allow"
-        Action = ["dynamodb:Scan", "dynamodb:UpdateItem"]
+        Action   = ["dynamodb:Scan", "dynamodb:UpdateItem"]
         Resource = aws_dynamodb_table.jobs.arn
       },
       {

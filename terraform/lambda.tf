@@ -1,11 +1,11 @@
 resource "aws_lambda_function" "submit" {
-  function_name     = "job-submit"
-  runtime           = "python3.12"
-  handler           = "handler.handler"
-  filename          = "../build/submit.zip"
-  source_code_hash  = filebase64sha256("../build/submit.zip")
-  role              = aws_iam_role.submit_role.arn
-  timeout           = 10
+  function_name    = "job-submit"
+  runtime          = "python3.12"
+  handler          = "handler.handler"
+  filename         = "../build/submit.zip"
+  source_code_hash = filebase64sha256("../build/submit.zip")
+  role             = aws_iam_role.submit_role.arn
+  timeout          = 10
 
   environment {
     variables = {

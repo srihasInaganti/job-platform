@@ -38,7 +38,7 @@ resource "aws_s3_bucket_cors_configuration" "raw_uploads_cors" {
   bucket = aws_s3_bucket.raw_uploads.id
   cors_rule {
     allowed_methods = ["PUT", "GET"]
-    allowed_origins = ["*"]   # tighten to your frontend origin later
+    allowed_origins = ["*"] # tighten to your frontend origin later
     allowed_headers = ["*"]
   }
 }
