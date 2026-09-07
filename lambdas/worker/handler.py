@@ -170,12 +170,6 @@ def process_one_job(job_id: str, context: Any) -> None:
             Body=buf,
             ContentType=f"image/{ext}",
         )
-        
-        # Check if chaos delay is requested
-        sleep_delay = int(params.get("chaos_delay_sec", 0))
-        if sleep_delay > 0 and attempts == 1:
-            log("zombie_worker_sleeping", job_id=job_id, delay=sleep_delay, lease_token=lease_token)
-            time.sleep(sleep_delay)
 
 
         if complete_job_fenced(job_id, lease_token, result_key):
