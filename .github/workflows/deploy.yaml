@@ -18,6 +18,11 @@ jobs:
         working-directory: terraform
         run: terraform fmt -check
 
+      - name: Package zip Lambdas for validation
+        run: |
+          chmod +x scripts/package_lambdas.sh
+          ./scripts/package_lambdas.sh
+
       - name: Terraform Validate
         working-directory: terraform
         run: |
