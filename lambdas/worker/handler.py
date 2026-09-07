@@ -130,8 +130,8 @@ def process_one_job(job_id: str, context: Any):
 
     # --- RAW HARD CRASH CHAOS INJECTION ---
     # Simulates an unhandled SIGKILL / container OOM, bypassing all Python catch blocks
-    chaos_kill_prob = float(params.get("chaos_kill_probability", 0.0))
-    if chaos_kill_prob > 0.0 and random.random() < chaos_kill_prob:
+    chaos_kill_pct = int(params.get("chaos_kill_percentage", 0))
+    if chaos_kill_pct > 0 and random.randint(1, 100) <= chaos_kill_pct:
         log("chaos_kill_triggered", job_id=job_id, lease_token=lease_token)
         os._exit(137)
     # --------------------------------------
