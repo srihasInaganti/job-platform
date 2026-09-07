@@ -60,7 +60,7 @@ resource "aws_iam_role_policy" "reconcile_policy" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = ["dynamodb:Scan"]
+        Action = ["dynamodb:Scan", "dynamodb:UpdateItem"]
         Resource = aws_dynamodb_table.jobs.arn
       },
       {
@@ -108,6 +108,37 @@ resource "aws_iam_role_policy" "worker_policy" {
         Effect   = "Allow"
         Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
         Resource = aws_sqs_queue.job_queue.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "arn:aws:logs:*:*:*"
+      }
+    ]
+  })
+}
+
+# --- Status Lambda Role ---
+resource "aws_iam_role" "status_role" {
+  name               = "job-status-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
+}
+
+resource "aws_iam_role_policy" "status_policy" {
+  name = "job-status-policy"
+  role = aws_iam_role.status_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem"]
+        Resource = aws_dynamodb_table.jobs.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = "${aws_s3_bucket.results.arn}/*"
       },
       {
         Effect   = "Allow"

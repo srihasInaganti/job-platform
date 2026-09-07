@@ -72,4 +72,24 @@ resource "aws_lambda_event_source_mapping" "sqs_to_worker" {
   event_source_arn = aws_sqs_queue.job_queue.arn
   function_name    = aws_lambda_function.worker.arn
   batch_size       = 1
+
+  scaling_config {
+    maximum_concurrency = 10
+  }
+}
+
+resource "aws_lambda_function" "status" {
+  function_name    = "job-status"
+  filename         = "../build/status.zip"
+  source_code_hash = filebase64sha256("../build/status.zip")
+  handler          = "handler.handler"
+  runtime          = "python3.12"
+  role             = aws_iam_role.status_role.arn
+
+  environment {
+    variables = {
+      JOBS_TABLE     = aws_dynamodb_table.jobs.name
+      RESULTS_BUCKET = aws_s3_bucket.results.bucket
+    }
+  }
 }

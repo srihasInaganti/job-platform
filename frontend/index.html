@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cloud Image Processor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen py-10 px-4">
+  <div class="max-w-5xl mx-auto">
+    <!-- Header -->
+    <header class="mb-8">
+      <h1 class="text-3xl font-extrabold tracking-tight">Async Image Processing Pipeline</h1>
+      <p class="text-sm text-slate-400 mt-1">
+        API Gateway &rarr; SQS &rarr; Lambda (Pillow Container) &rarr; S3 &amp; DynamoDB
+      </p>
+    </header>
+
+    <!-- Grid: items-start stops left-side expansion from stretching the right column -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <!-- Controls (Left Panel) -->
+      <section class="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-5">
+        <h2 class="text-lg font-semibold text-slate-200">1. Select &amp; Configure</h2>
+
+        <!-- Custom Upload Area -->
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Upload Source Image</label>
+          <label
+            for="imageInput"
+            id="dropZone"
+            class="flex flex-col items-center justify-center p-5 border-2 border-dashed border-slate-700 hover:border-blue-500 rounded-xl cursor-pointer bg-slate-950/40 hover:bg-slate-900/50 transition duration-200 group text-center"
+          >
+            <svg class="w-8 h-8 mb-2 text-slate-400 group-hover:text-blue-400 transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+            </svg>
+            <span id="uploadPrompt" class="text-sm text-slate-300 group-hover:text-white font-medium">Click to select or drop image</span>
+            <span id="fileSelectedPill" class="hidden text-xs text-blue-400 font-mono mt-1 bg-blue-950/60 px-2 py-0.5 rounded border border-blue-800/60 max-w-[240px] truncate"></span>
+            <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp" class="hidden" />
+          </label>
+        </div>
+
+        <!-- Dynamic Operation Form -->
+        <div id="configSection" class="hidden space-y-4 pt-4 border-t border-slate-800">
+          <div>
+            <label for="operationSelect" class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Transformation Operation</label>
+            <div class="relative">
+              <select
+                id="operationSelect"
+                class="w-full appearance-none bg-slate-950 border border-slate-800 hover:border-slate-700 focus:border-blue-500 rounded-lg px-3.5 py-2.5 text-sm text-slate-200 focus:outline-none transition cursor-pointer pr-10"
+              >
+                <option value="grayscale">Grayscale (Black &amp; White)</option>
+                <option value="resize">Resize (Downscale Width)</option>
+                <option value="thumbnail">Thumbnail (Square Constrained)</option>
+                <option value="convert">Format Conversion</option>
+              </select>
+              <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-400">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Resize Width Slider -->
+          <div id="paramResize" class="hidden space-y-1.5">
+            <div class="flex justify-between text-xs text-slate-400">
+              <label for="resizeWidth">Target Width</label>
+              <span id="resizeWidthVal" class="font-mono text-blue-400 font-bold">200px</span>
+            </div>
+            <input type="range" id="resizeWidth" min="100" max="800" step="50" value="200" class="w-full accent-blue-500 cursor-pointer" />
+            <p class="text-[11px] text-slate-500">Aspect ratio is calculated and preserved automatically.</p>
+          </div>
+
+          <!-- Thumbnail Size Slider -->
+          <div id="paramThumbnail" class="hidden space-y-1.5">
+            <div class="flex justify-between text-xs text-slate-400">
+              <label for="thumbSize">Max Bounding Box</label>
+              <span id="thumbSizeVal" class="font-mono text-blue-400 font-bold">120px</span>
+            </div>
+            <input type="range" id="thumbSize" min="60" max="300" step="20" value="120" class="w-full accent-blue-500 cursor-pointer" />
+          </div>
+
+          <!-- Convert Format Dropdown -->
+          <div id="paramConvert" class="hidden">
+            <label for="targetFormat" class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Target Output Format</label>
+            <div class="relative">
+              <select
+                id="targetFormat"
+                class="w-full appearance-none bg-slate-950 border border-slate-800 hover:border-slate-700 focus:border-blue-500 rounded-lg px-3.5 py-2.5 text-sm text-slate-200 focus:outline-none transition cursor-pointer pr-10"
+              >
+                <option value="JPEG">JPEG</option>
+                <option value="PNG">PNG</option>
+                <option value="WEBP">WEBP</option>
+              </select>
+              <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-400">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Primary Action Button -->
+          <button
+            id="processBtn"
+            onclick="handleProcess()"
+            class="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-500 active:scale-[0.99] font-medium text-sm rounded-lg transition shadow-lg shadow-blue-900/30"
+          >
+            Dispatch Job
+          </button>
+        </div>
+
+        <!-- Terminal Status Console: Clamped height with internal scrolling -->
+        <div
+          id="statusConsole"
+          class="hidden bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono space-y-1 h-36 overflow-y-auto"
+        ></div>
+      </section>
+
+      <!-- Visual Preview Comparison (Right Panel) -->
+      <section class="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+        <h2 class="text-lg font-semibold text-slate-200">2. Visual Comparison</h2>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <!-- Input Card: Explicit fixed height (h-64) prevents layout pops -->
+          <div class="bg-slate-950/70 border border-slate-800 rounded-lg p-3 flex flex-col items-center justify-between h-64">
+            <div class="text-xs uppercase font-semibold text-slate-400">Original Input</div>
+            <div id="originalEmpty" class="text-xs text-slate-600 my-auto">No file loaded</div>
+            <div class="h-40 w-full flex items-center justify-center overflow-hidden">
+              <img id="originalPreview" class="hidden max-h-40 max-w-full rounded border border-slate-800 object-contain" alt="Original" />
+            </div>
+            <div id="originalMeta" class="invisible text-[11px] font-mono text-slate-400 bg-slate-900/80 px-2 py-0.5 rounded w-full text-center truncate">
+              --
+            </div>
+          </div>
+
+          <!-- Output Card: Exact same explicit height (h-64) -->
+          <div class="bg-slate-950/70 border border-slate-800 rounded-lg p-3 flex flex-col items-center justify-between h-64">
+            <div class="text-xs uppercase font-semibold text-slate-400">Processed Output</div>
+            <div id="resultEmpty" class="text-xs text-slate-600 my-auto">Awaiting job...</div>
+            <div class="h-40 w-full flex items-center justify-center overflow-hidden">
+              <img id="resultPreview" class="hidden max-h-40 max-w-full rounded border border-slate-800 object-contain" alt="Result" />
+            </div>
+            <div id="resultMeta" class="invisible text-[11px] font-mono text-emerald-400 bg-slate-900/80 px-2 py-0.5 rounded w-full text-center truncate">
+              --
+            </div>
+          </div>
+        </div>
+
+        <!-- Stable Metric Footer Bar -->
+        <div id="metricsBar" class="invisible pt-3 border-t border-slate-800 text-xs font-mono text-slate-400 flex justify-between">
+          <span>Job ID: <span id="metricJobId" class="text-slate-200"></span></span>
+          <span>Latency: <span id="metricDuration" class="text-emerald-400 font-semibold"></span></span>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = "https://irvf3ci138.execute-api.us-east-1.amazonaws.com";
+
+    let selectedFile = null;
+
+    const fileInput = document.getElementById("imageInput");
+    const uploadPrompt = document.getElementById("uploadPrompt");
+    const fileSelectedPill = document.getElementById("fileSelectedPill");
+    const configSection = document.getElementById("configSection");
+    const opSelect = document.getElementById("operationSelect");
+    const paramResize = document.getElementById("paramResize");
+    const paramThumbnail = document.getElementById("paramThumbnail");
+    const paramConvert = document.getElementById("paramConvert");
+    const resizeWidth = document.getElementById("resizeWidth");
+    const resizeWidthVal = document.getElementById("resizeWidthVal");
+    const thumbSize = document.getElementById("thumbSize");
+    const thumbSizeVal = document.getElementById("thumbSizeVal");
+    const targetFormat = document.getElementById("targetFormat");
+    const processBtn = document.getElementById("processBtn");
+    const statusConsole = document.getElementById("statusConsole");
+
+    const originalPreview = document.getElementById("originalPreview");
+    const originalEmpty = document.getElementById("originalEmpty");
+    const originalMeta = document.getElementById("originalMeta");
+
+    const resultPreview = document.getElementById("resultPreview");
+    const resultEmpty = document.getElementById("resultEmpty");
+    const resultMeta = document.getElementById("resultMeta");
+
+    const metricsBar = document.getElementById("metricsBar");
+    const metricJobId = document.getElementById("metricJobId");
+    const metricDuration = document.getElementById("metricDuration");
+
+    fileInput.addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      selectedFile = file;
+      uploadPrompt.textContent = "Change selected image";
+      fileSelectedPill.textContent = file.name;
+      fileSelectedPill.classList.remove("hidden");
+      configSection.classList.remove("hidden");
+
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        originalPreview.src = evt.target.result;
+        originalPreview.onload = () => {
+          const kb = (file.size / 1024).toFixed(1);
+          originalMeta.textContent = `${originalPreview.naturalWidth}×${originalPreview.naturalHeight}px (${kb} KB)`;
+          originalMeta.classList.remove("invisible");
+        };
+        originalPreview.classList.remove("hidden");
+        originalEmpty.classList.add("hidden");
+      };
+      reader.readAsDataURL(file);
+
+      resultPreview.classList.add("hidden");
+      resultMeta.classList.add("invisible");
+      resultEmpty.classList.remove("hidden");
+      resultEmpty.textContent = "Awaiting job...";
+      metricsBar.classList.add("invisible");
+    });
+
+    resizeWidth.addEventListener("input", (e) => {
+      resizeWidthVal.textContent = `${e.target.value}px`;
+    });
+    thumbSize.addEventListener("input", (e) => {
+      thumbSizeVal.textContent = `${e.target.value}px`;
+    });
+
+    opSelect.addEventListener("change", (e) => {
+      const op = e.target.value;
+      paramResize.classList.toggle("hidden", op !== "resize");
+      paramThumbnail.classList.toggle("hidden", op !== "thumbnail");
+      paramConvert.classList.toggle("hidden", op !== "convert");
+    });
+
+    function log(msg, color = "text-slate-400") {
+      statusConsole.classList.remove("hidden");
+      const line = document.createElement("p");
+      line.className = color;
+      line.textContent = `[${new Date().toISOString().slice(11, 19)}] ${msg}`;
+      statusConsole.appendChild(line);
+      statusConsole.scrollTop = statusConsole.scrollHeight;
+    }
+
+    async function handleProcess() {
+      if (!selectedFile) return;
+
+      processBtn.disabled = true;
+      processBtn.classList.add("opacity-50", "cursor-not-allowed");
+      statusConsole.innerHTML = "";
+      resultPreview.classList.add("hidden");
+      resultMeta.classList.add("invisible");
+      resultEmpty.classList.remove("hidden");
+      resultEmpty.textContent = "Worker running...";
+      metricsBar.classList.add("invisible");
+
+      const startTime = Date.now();
+
+      try {
+        log("1. Requesting S3 presigned URL...", "text-blue-400");
+        const uploadRes = await fetch(`${API_BASE}/uploads`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content_type: selectedFile.type || "image/jpeg" }),
+        });
+
+        if (!uploadRes.ok) throw new Error(`Upload ticket rejected: HTTP ${uploadRes.status}`);
+        const { upload_url, s3_key } = await uploadRes.json();
+
+        log("2. Uploading raw image directly to S3...", "text-blue-400");
+        const s3Put = await fetch(upload_url, {
+          method: "PUT",
+          headers: { "Content-Type": selectedFile.type || "image/jpeg" },
+          body: selectedFile,
+        });
+        if (!s3Put.ok) throw new Error(`S3 direct upload failed: HTTP ${s3Put.status}`);
+
+        const op = opSelect.value;
+        const params = {};
+        if (op === "resize") params.width = parseInt(resizeWidth.value, 10);
+        if (op === "thumbnail") params.size = parseInt(thumbSize.value, 10);
+        if (op === "convert") params.format = targetFormat.value;
+
+        log(`3. Enqueuing job [${op}] into SQS...`, "text-blue-400");
+        const jobRes = await fetch(`${API_BASE}/jobs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ s3_key, operation: op, params }),
+        });
+
+        if (!jobRes.ok) throw new Error(`API Gateway rejected job: HTTP ${jobRes.status}`);
+        const { job_id: jobId } = await jobRes.json();
+        log(`4. SQS message accepted: ${jobId.slice(0, 8)}...`, "text-amber-400");
+
+        let completed = false;
+        while (!completed) {
+          await new Promise((r) => setTimeout(r, 400));
+          const checkRes = await fetch(`${API_BASE}/jobs/${jobId}`);
+          const checkData = await checkRes.json();
+          const state = checkData.status;
+
+          log(`Polling: ${state}...`);
+
+          if (state === "COMPLETED") {
+            completed = true;
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+            log(`Done in ${elapsed}s!`, "text-emerald-400 font-bold");
+
+            metricJobId.textContent = jobId.slice(0, 8);
+            metricDuration.textContent = `${elapsed}s`;
+            metricsBar.classList.remove("invisible");
+
+            if (checkData.result_url) {
+              resultPreview.src = checkData.result_url;
+              resultPreview.onload = async () => {
+                let sizeStr = "";
+                try {
+                  const headRes = await fetch(checkData.result_url, { method: "HEAD" });
+                  const bytes = headRes.headers.get("content-length");
+                  if (bytes) sizeStr = ` (${(parseInt(bytes, 10) / 1024).toFixed(1)} KB)`;
+                } catch (_) {}
+                resultMeta.textContent = `${resultPreview.naturalWidth}×${resultPreview.naturalHeight}px${sizeStr}`;
+                resultMeta.classList.remove("invisible");
+              };
+              resultPreview.classList.remove("hidden");
+              resultEmpty.classList.add("hidden");
+            }
+          } else if (state === "FAILED") {
+            log("Worker failed processing.", "text-red-400 font-bold");
+            resultEmpty.textContent = "Worker marked job FAILED.";
+            break;
+          }
+        }
+      } catch (err) {
+        log(`Error: ${err.message}`, "text-red-400 font-bold");
+        resultEmpty.textContent = "Processing failed.";
+      } finally {
+        processBtn.disabled = false;
+        processBtn.classList.remove("opacity-50", "cursor-not-allowed");
+      }
+    }
+  </script>
+</body>
+</html>

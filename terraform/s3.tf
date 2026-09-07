@@ -42,3 +42,33 @@ resource "aws_s3_bucket_cors_configuration" "raw_uploads_cors" {
     allowed_headers = ["*"]
   }
 }
+
+resource "aws_s3_bucket_lifecycle_configuration" "cleanup_raw" {
+  bucket = aws_s3_bucket.raw_uploads.id
+
+  rule {
+    id     = "expire-raw-after-1-day"
+    status = "Enabled"
+
+    filter {}
+
+    expiration {
+      days = 1
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "cleanup_results" {
+  bucket = aws_s3_bucket.results.id
+
+  rule {
+    id     = "expire-results-after-1-day"
+    status = "Enabled"
+
+    filter {}
+
+    expiration {
+      days = 1
+    }
+  }
+}

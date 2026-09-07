@@ -6,6 +6,7 @@ import boto3
 from botocore.exceptions import ClientError
 from PIL import Image
 from typing import Any, cast
+import logging
 
 dynamodb = boto3.resource("dynamodb")
 s3 = boto3.client("s3")
@@ -13,6 +14,12 @@ table = dynamodb.Table(os.environ["JOBS_TABLE"])
 RAW_BUCKET = os.environ["RAW_BUCKET"]
 RESULTS_BUCKET = os.environ["RESULTS_BUCKET"]
 LEASE_SECONDS = 120  # a PROCESSING job older than this is considered abandoned
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def log(event_type, **kwargs):
+    logger.info(json.dumps({"event": event_type, **kwargs}))
 
 
 def handler(event, context):
@@ -25,12 +32,6 @@ def try_claim(job_id, context):
     now = int(time.time())
     lease_cutoff = now - LEASE_SECONDS
     try:
-        # ExpressionAttributeNames used defensively: "status" (and several close
-        # variants) are reserved words in DynamoDB's expression syntax. `job_status`
-        # is safe as written, but if you ever rename this field to `status`, an
-        # unaliased ConditionExpression/UpdateExpression referencing it will fail
-        # with a cryptic "reserved keyword" error. Aliasing it now means a future
-        # rename is a one-line change instead of a debugging session.
         table.update_item(
             Key={"job_id": job_id},
             UpdateExpression="SET #s = :processing, worker_id = :wid, processing_started_at = :now",
@@ -49,12 +50,15 @@ def try_claim(job_id, context):
                 ":now": now,
             },
         )
+        log("job_claimed", job_id=job_id, worker_id=context.aws_request_id)
         return True
     except ClientError as e:
         error_code = e.response.get("Error", {}).get("Code")
         if error_code == "ConditionalCheckFailedException":
-            return False  # someone else holds a live lease — treat as success, let SQS delete the msg
+            log("job_claim_skipped", job_id=job_id, reason="held_by_another_worker")
+            return False
         raise
+
 
 def process_one_job(job_id: str, context: Any):
     response = table.get_item(Key={"job_id": job_id})
@@ -62,11 +66,12 @@ def process_one_job(job_id: str, context: Any):
     if not raw_item:
         return
 
-    # Cast to standard dict so .get() and key lookups have normal dictionary semantics
     job = cast(dict[str, Any], raw_item)
 
     if not try_claim(job_id, context):
         return
+
+    start_time = time.time()
 
     try:
         s3_key = str(job["s3_key"])
@@ -75,22 +80,38 @@ def process_one_job(job_id: str, context: Any):
 
         op = str(job.get("operation", ""))
         params: dict[str, Any] = job.get("params") or {}
-        fmt = str(params.get("format", img.format or "PNG"))
+        fmt = str(params.get("format", img.format or "PNG")).upper()
+        if fmt == "JPG":
+            fmt = "JPEG"
 
+        # Supported Operations
         if op == "resize":
             width = int(params.get("width", 200))
             ratio = width / img.width
-            img = img.resize((width, int(img.height * ratio)))
+            img = img.resize((width, int(img.height * ratio)), Image.Resampling.LANCZOS)
         elif op == "thumbnail":
-            img.thumbnail((150, 150))
-        # "convert" needs no pixel changes — just saves in a different format below
+            size = int(params.get("size", 150))
+            img.thumbnail((size, size), Image.Resampling.LANCZOS)
+        elif op == "grayscale":
+            img = img.convert("L")
+        # "convert" requires no pixel changes — simply re-encoded below
+
+        # Protect against JPEG RGBA saves
+        if fmt == "JPEG" and img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
 
         buf = io.BytesIO()
         img.save(buf, format=fmt)
         buf.seek(0)
 
-        result_key = f"{job_id}.{fmt.lower()}"  # deterministic key — safe to overwrite on retry
-        s3.put_object(Bucket=RESULTS_BUCKET, Key=result_key, Body=buf)
+        ext = "jpg" if fmt == "JPEG" else fmt.lower()
+        result_key = f"{job_id}.{ext}"
+        s3.put_object(
+            Bucket=RESULTS_BUCKET,
+            Key=result_key,
+            Body=buf,
+            ContentType=f"image/{ext}"
+        )
 
         table.update_item(
             Key={"job_id": job_id},
@@ -98,11 +119,15 @@ def process_one_job(job_id: str, context: Any):
             ExpressionAttributeNames={"#s": "job_status"},
             ExpressionAttributeValues={":done": "COMPLETED", ":rk": result_key},
         )
-    except Exception:
+        duration_ms = int((time.time() - start_time) * 1000)
+        log("job_completed", job_id=job_id, duration_ms=duration_ms, operation=op)
+
+    except Exception as e:
+        log("job_failed", job_id=job_id, error=str(e))
         table.update_item(
             Key={"job_id": job_id},
             UpdateExpression="SET #s = :failed",
             ExpressionAttributeNames={"#s": "job_status"},
             ExpressionAttributeValues={":failed": "FAILED"},
         )
-        raise  # re-raise so SQS still counts this as a failed delivery for DLQ/retry purposes
+        raise
