@@ -1,6 +1,12 @@
 resource "aws_sqs_queue" "job_queue" {
   name                       = "job-queue"
-  visibility_timeout_seconds = 180
+  visibility_timeout_seconds = 15
+  message_retention_seconds  = 345600
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.job_dlq.arn
+    maxReceiveCount     = 3
+  })
 }
 
 resource "aws_sqs_queue" "job_dlq" {
