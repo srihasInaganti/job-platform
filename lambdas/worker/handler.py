@@ -1,14 +1,14 @@
 import io
 import json
+import logging
 import os
 import time
 import uuid
-import random
+from typing import Any, Optional, cast
+
 import boto3
 from botocore.exceptions import ClientError
 from PIL import Image
-from typing import Any, cast, Optional
-import logging
 
 dynamodb = boto3.resource("dynamodb")
 s3 = boto3.client("s3")
@@ -22,20 +22,20 @@ LEASE_SECONDS = int(os.environ.get("LEASE_SECONDS", "10"))
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-def log(event_type, **kwargs):
+
+def log(event_type: str, **kwargs: Any) -> None:
     logger.info(json.dumps({"event": event_type, **kwargs}))
 
 
-def handler(event, context):
+def handler(event: dict[str, Any], context: Any) -> None:
     for record in event["Records"]:
         body = json.loads(record["body"])
         process_one_job(body["job_id"], context)
 
-
 def try_claim(job_id: str, lease_token: str, context: Any) -> Optional[int]:
     """
     Atomically claims or reclaims a job.
-    Returns the new attempt_count on success, or None if skipped/held.
+    Returns the updated attempt_count on success, or None if the lease is still active.
     """
     now = int(time.time())
     lease_cutoff = now - LEASE_SECONDS
@@ -70,7 +70,8 @@ def try_claim(job_id: str, lease_token: str, context: Any) -> Optional[int]:
             },
             ReturnValues="ALL_NEW",
         )
-        current_attempts = int(res.get("Attributes", {}).get("attempt_count", 1))
+        attributes = cast(dict[str, Any], res.get("Attributes") or {})
+        current_attempts = int(cast(Any, attributes.get("attempt_count", 1)))
         log("job_claimed", job_id=job_id, worker_id=worker_id, lease_token=lease_token, attempt=current_attempts)
         return current_attempts
     except ClientError as e:
@@ -80,11 +81,10 @@ def try_claim(job_id: str, lease_token: str, context: Any) -> Optional[int]:
             return None
         raise
 
-
 def complete_job_fenced(job_id: str, lease_token: str, result_key: str) -> bool:
     """
-    Fenced write: only succeeds if our lease_token is still the active token in DynamoDB.
-    If another worker reclaimed this job while we stalled, this write fails and we clean up S3.
+    Fenced write: only succeeds if our lease_token is still active in DynamoDB.
+    If another worker reclaimed this job while we stalled, this write fails and cleans up S3.
     """
     now = int(time.time())
     try:
@@ -104,7 +104,7 @@ def complete_job_fenced(job_id: str, lease_token: str, result_key: str) -> bool:
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
             log("fenced_out_on_complete", job_id=job_id, lease_token=lease_token)
-            # Clean up orphaned S3 object to prevent dangling results
+            # Purge orphaned S3 object to prevent dangling, untracked artifacts
             try:
                 s3.delete_object(Bucket=RESULTS_BUCKET, Key=result_key)
                 log("cleaned_orphaned_s3", job_id=job_id, result_key=result_key)
@@ -114,7 +114,7 @@ def complete_job_fenced(job_id: str, lease_token: str, result_key: str) -> bool:
         raise
 
 
-def process_one_job(job_id: str, context: Any):
+def process_one_job(job_id: str, context: Any) -> None:
     response = table.get_item(Key={"job_id": job_id})
     raw_item = response.get("Item")
     if not raw_item:
@@ -127,20 +127,10 @@ def process_one_job(job_id: str, context: Any):
 
     attempts = try_claim(job_id, lease_token, context)
     if attempts is None:
-        # If the lease is still warm, fail the Lambda execution
-        # so SQS retries after visibility timeout instead of silently dropping the message.
+        # Fail the Lambda execution so SQS re-queues after visibility timeout
         raise RuntimeError(f"Job {job_id} currently locked by another worker lease")
 
     params: dict[str, Any] = job.get("params") or {}
-
-    # --- RAW HARD CRASH CHAOS INJECTION ---
-    # Only crash on attempt 1 so attempt 2 can recover and finalize
-    chaos_kill_pct = int(params.get("chaos_kill_pct", 0))
-    if chaos_kill_pct > 0 and attempts == 1 and random.randint(1, 100) <= chaos_kill_pct:
-        log("chaos_kill_triggered", job_id=job_id, lease_token=lease_token, attempt=attempts)
-        os._exit(137)
-    # --------------------------------------
-
     start_time = time.time()
 
     try:
@@ -178,16 +168,21 @@ def process_one_job(job_id: str, context: Any):
             Bucket=RESULTS_BUCKET,
             Key=result_key,
             Body=buf,
-            ContentType=f"image/{ext}"
+            ContentType=f"image/{ext}",
         )
+        
+        # Check if chaos delay is requested
+        sleep_delay = int(params.get("chaos_delay_sec", 0))
+        if sleep_delay > 0 and attempts == 1:
+            log("zombie_worker_sleeping", job_id=job_id, delay=sleep_delay, lease_token=lease_token)
+            time.sleep(sleep_delay)
 
-        # Fenced completion write: guards against split-brain if we were reclaimed
+
         if complete_job_fenced(job_id, lease_token, result_key):
             duration_ms = int((time.time() - start_time) * 1000)
             log("job_completed", job_id=job_id, duration_ms=duration_ms, operation=op)
 
     except Exception as e:
-        # Handled failures: only update to FAILED if we still hold the lease token
         log("job_failed", job_id=job_id, error=str(e))
         try:
             table.update_item(
@@ -198,5 +193,5 @@ def process_one_job(job_id: str, context: Any):
                 ExpressionAttributeValues={":failed": "FAILED", ":my_token": lease_token},
             )
         except ClientError:
-            pass  # If another worker reclaimed it already, don't overwrite with FAILED
+            pass  # If another worker reclaimed it already, do not overwrite with FAILED
         raise
